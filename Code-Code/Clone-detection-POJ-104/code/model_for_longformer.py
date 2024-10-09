@@ -22,17 +22,12 @@ class Model(nn.Module):
         if global_attention_mask is not None:
             global_attention_mask = torch.cat((global_attention_mask, global_attention_mask, global_attention_mask), 0)
 
-        outputs = self.encoder(input_ids, attention_mask=input_ids.ne(1), global_attention_mask=global_attention_mask)
-        
-        if isinstance(outputs, tuple):
-            outputs = outputs[0]
-        
-        if self.args.model_type == 'longformer':
-            outputs = outputs[:, 0, :]  # Use [CLS] token representation
+        outputs=self.encoder(input_ids,attention_mask=input_ids.ne(2), global_attention_mask=global_attention_mask)
+        if len(outputs) > 1:
+            outputs = outputs[1]
         else:
-            outputs = outputs[1]  # For other models, use the pooled output
-        
-        outputs = outputs.split(bs, 0)
+            outputs = outputs[0][:, 0, :]
+        outputs=outputs.split(bs,0)
 
         prob_1 = (outputs[0] * outputs[1]).sum(-1)
         prob_2 = (outputs[0] * outputs[2]).sum(-1)
