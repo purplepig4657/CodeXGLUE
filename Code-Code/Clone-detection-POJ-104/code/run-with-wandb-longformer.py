@@ -137,7 +137,8 @@ def train(args, train_dataset, model, tokenizer):
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler,
                                   batch_size=args.train_batch_size,num_workers=4,pin_memory=True)
     args.max_steps=args.epoch*len( train_dataloader)
-    args.save_steps=len( train_dataloader)
+    args.save_steps=int(len( train_dataloader) / args.gradient_accumulation_steps)
+    logger.info(f"save_steps: {args.save_steps}");
     args.warmup_steps=len( train_dataloader)
     args.logging_steps=len( train_dataloader)
     args.num_train_epochs=args.epoch

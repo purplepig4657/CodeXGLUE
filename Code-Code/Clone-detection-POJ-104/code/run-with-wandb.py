@@ -151,7 +151,8 @@ def train(args, train_dataset, model, tokenizer):
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, 
                                   batch_size=args.train_batch_size,num_workers=4,pin_memory=True)
     args.max_steps=args.epoch*len( train_dataloader)
-    args.save_steps=len( train_dataloader)
+    args.save_steps=int(len( train_dataloader) / args.gradient_accumulation_steps)
+    logger.info(f"args.save_steps: {args.save_steps}")
     args.warmup_steps=len( train_dataloader)
     args.logging_steps=len( train_dataloader)
     args.num_train_epochs=args.epoch
@@ -210,12 +211,16 @@ def train(args, train_dataset, model, tokenizer):
         bar = train_dataloader
         tr_num=0
         train_loss=0
+        # logger.info("Start step loop")
         for step, batch in enumerate(bar):
+            # logger.info(f"step: {step}");
             inputs = batch[0].to(args.device)    
             p_inputs = batch[1].to(args.device)
             n_inputs = batch[2].to(args.device)
             labels = batch[3].to(args.device)
+            # logger.info("model.train()")
             model.train()
+            # logger.info("model inference")
             loss,vec = model(inputs,p_inputs,n_inputs,labels)
 
 
@@ -229,6 +234,7 @@ def train(args, train_dataset, model, tokenizer):
                     scaled_loss.backward()
                 torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
             else:
+                # logger.info("loss.backward()")
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
@@ -245,12 +251,18 @@ def train(args, train_dataset, model, tokenizer):
             wandb.log({
                 "train_loss": avg_loss,
                 # "learning_rate": scheduler.get_last_lr()[0],
-                # "global_step": global_step,
+                "global_step": global_step,
             })
+
+            # logger.info("step {} gradient_accm_step".format(step, args.gradient_accumulation_steps))
+            # logger.info("local_rank {} save_steps {} global_step % save_steps {} evaluate_during_training {}".format(args.local_rank, args.save_steps, global_step % args.save_steps, args.evaluate_during_training))
                 
             if (step + 1) % args.gradient_accumulation_steps == 0:
+                # logger.info("optimizer.step()")
                 optimizer.step()
+                # logger.info("optimizer.zero_grad()")
                 optimizer.zero_grad()
+                # logger.info("scheduler.step()")
                 scheduler.step()  
                 global_step += 1
                 output_flag=True
@@ -259,10 +271,15 @@ def train(args, train_dataset, model, tokenizer):
                     logging_loss = tr_loss
                     tr_nb=global_step
 
+                # logger.info("local_rank {} save_steps {} global_step % save_steps {} evaluate_during_training {}".format(args.local_rank, args.save_steps, global_step % args.save_steps, args.evaluate_during_training))
+
+
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
                     
                     if args.local_rank == -1 and args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
+                        # print("안녕 난 evaluatio 이야")
                         results = evaluate(args, model, tokenizer,eval_when_training=True)
+                        wandb.log({"eval_acc": results['eval_map']})
                         for key, value in results.items():
                             logger.info("  %s = %s", key, round(value,4))                    
                         # Save model checkpoint
@@ -315,21 +332,39 @@ def evaluate(args, model, tokenizer,eval_when_training=False):
     model.eval()
     vecs=[] 
     labels=[]
+    # logger.info("evaluation: loop start")
     for batch in eval_dataloader:
+        # logger.info(batch)
         inputs = batch[0].to(args.device)    
+        # logger.info("inputs to device")
         p_inputs = batch[1].to(args.device)
+        # logger.info("p_inputs to device")
         n_inputs = batch[2].to(args.device)
+        # logger.info("n_inputs to device")
         label = batch[3].to(args.device)
+        # logger.info("label to device")
         with torch.no_grad():
+            # logger.info(f"evaluation {nb_eval_steps}: model inference")
+            # logger.info(f"inputs: {inputs}")
+            # logger.info(f"p_inputs: {p_inputs}")
+            # logger.info(f"n_inputs: {n_inputs}")
+            # logger.info(f"label: {label}")
             lm_loss,vec = model(inputs,p_inputs,n_inputs,label)
+            # logger.info(f"model() passed");
             eval_loss += lm_loss.mean().item()
+            # logger.info(f"eval_loss passed");
             vecs.append(vec.cpu().numpy())
+            # logger.info(f"vec append passed");
             labels.append(label.cpu().numpy())
+            # logger.info(f"label append passed");
         nb_eval_steps += 1
+    logger.info("evaluation: loop end")
     vecs=np.concatenate(vecs,0)
     labels=np.concatenate(labels,0)
     eval_loss = eval_loss / nb_eval_steps
     perplexity = torch.tensor(eval_loss)
+
+    logger.info("matmul start")
 
     scores=np.matmul(vecs,vecs.T)
     dic={}
@@ -340,6 +375,7 @@ def evaluate(args, model, tokenizer,eval_when_training=False):
         dic[int(labels[i])]+=1
     sort_ids=np.argsort(scores, axis=-1, kind='quicksort', order=None)[:,::-1]
     MAP=[]
+    logger.info("evaluation: calculate map start")
     for i in range(scores.shape[0]):
         cont=0
         label=int(labels[i])
@@ -349,6 +385,7 @@ def evaluate(args, model, tokenizer,eval_when_training=False):
             if int(labels[index])==label:
                 Avep.append((len(Avep)+1)/(j+1))
         MAP.append(sum(Avep)/dic[label])
+    logger.info("evaluation: calculate map end")
           
     result = {
         "eval_loss": float(perplexity),
